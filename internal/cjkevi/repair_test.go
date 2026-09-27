@@ -54,8 +54,12 @@ func TestRepairerProtocols(t *testing.T) {
 					if err := json.Unmarshal(body["questions"], &questions); err != nil || len(questions) != 1 || questions["intrusion"].Type != "noul" {
 						t.Errorf("Jev must receive exactly one typed noul question")
 					}
-					if stage == 0 && questions["intrusion"].Instructions != intentionalPrompt || stage == 1 && questions["intrusion"].Instructions != intrusionPrompt {
-						t.Errorf("incorrect Jev prompt at stage %d", stage)
+					wantInstruction := intentionalPrompt
+					if stage == 1 {
+						wantInstruction = intrusionPrompt
+					}
+					if questions["intrusion"].Instructions != wantInstruction || strings.Contains(wantInstruction, "span") {
+						t.Errorf("Jev prompt at stage %d does not match unmarked state", stage)
 					}
 					stage++
 					_, _ = io.WriteString(w, `{"answers":{"intrusion":{"type":"noul","noul":0.7}}}`)

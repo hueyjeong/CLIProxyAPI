@@ -34,7 +34,7 @@ func TestCorrectionTerminalOutcomesViaAuthenticatedHistory(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 				t.Error(err)
 			}
-			if strings.Contains(input.Questions["intrusion"].Instructions, "제공된 span이 놓인 문맥") {
+			if strings.Contains(input.Questions["intrusion"].Instructions, "다음 용도 중 하나") {
 				score = "0.1"
 			}
 		}

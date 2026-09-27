@@ -116,7 +116,7 @@ func TestStructuredCorrectionRoutes(t *testing.T) {
 			t.Errorf("Jev received non-leaf input: %q %v", input.State, err)
 		}
 		score := "0.9"
-		if strings.Contains(input.Questions["intrusion"].Instructions, "제공된 span이 놓인 문맥") {
+		if strings.Contains(input.Questions["intrusion"].Instructions, "다음 용도 중 하나") {
 			score = "0.1"
 		}
 		_, _ = io.WriteString(w, `{"answers":{"intrusion":{"type":"noul","noul":`+score+`}}}`)
