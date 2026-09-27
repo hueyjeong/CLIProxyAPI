@@ -20,6 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 	managementHandlers "github.com/router-for-me/CLIProxyAPI/v7/internal/api/handlers/management"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api/middleware"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/cjkevi"
 	codexlive "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/live"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
@@ -55,8 +56,14 @@ type Server struct {
 	codexLiveHandler *codexlive.Handler
 
 	// cfg holds the current server configuration.
-	cfgMu sync.RWMutex
-	cfg   *config.Config
+	cfgMu             sync.RWMutex
+	cfg               *config.Config
+	shadow            *cjkevi.Observer
+	shadowBudget      *cjkevi.Budget
+	correction        *cjkevi.Repairer
+	correctionHistory *cjkevi.History
+	correctionSlots   chan struct{}
+	stopped           bool
 
 	// oldConfigYaml stores a YAML snapshot of the previous configuration for change detection.
 	// This prevents issues when the config object is modified in place by Management API.
@@ -175,11 +182,28 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	envAdminPassword = strings.TrimSpace(envAdminPassword)
 	envManagementSecret := envAdminPasswordSet && envAdminPassword != ""
 
+	// Share shadow memory limits across configuration reloads.
+	shadowBudget := cjkevi.NewBudget()
+	var correction *cjkevi.Repairer
+	if errCorrection := cfg.ValidateCJKeviCorrection(); errCorrection != nil {
+		log.WithError(errCorrection).Error("invalid CJKevi correction configuration")
+	} else {
+		var errCorrection error
+		correction, errCorrection = newCorrection(cfg.CJKeviCorrection)
+		if errCorrection != nil {
+			log.WithError(errCorrection).Error("failed to initialize CJKevi correction")
+		}
+	}
 	// Create server instance
 	s := &Server{
 		engine:              engine,
 		handlers:            handlers.NewBaseAPIHandlers(effectiveSDKConfig(cfg), authManager),
 		cfg:                 cfg,
+		shadowBudget:        shadowBudget,
+		shadow:              cjkevi.NewObserver(cfg.CJKeviShadow, shadowBudget),
+		correction:          correction,
+		correctionHistory:   &cjkevi.History{},
+		correctionSlots:     make(chan struct{}, 4),
 		accessManager:       accessManager,
 		requestLogger:       requestLogger,
 		loggerToggle:        toggle,
@@ -211,7 +235,12 @@ func NewServer(cfg *config.Config, authManager *auth.Manager, accessManager *sdk
 	// Initialize management handler
 	s.mgmt = managementHandlers.NewHandler(cfg, configFilePath, authManager)
 	s.mgmt.SetPluginHost(optionState.pluginHost)
-	s.mgmt.SetConfigReloadHook(optionState.configReloadHook)
+	s.mgmt.SetConfigReloadHook(func(ctx context.Context, updated *config.Config) {
+		s.UpdateClientsContext(ctx, updated)
+		if optionState.configReloadHook != nil {
+			optionState.configReloadHook(ctx, updated)
+		}
+	})
 	if optionState.localPassword != "" {
 		s.mgmt.SetLocalPassword(optionState.localPassword)
 	}
@@ -407,6 +436,14 @@ func (s *Server) Start() error {
 //   - error: An error if the server fails to stop
 func (s *Server) Stop(ctx context.Context) error {
 	log.Debug("Stopping API server...")
+
+	s.cfgMu.Lock()
+	shadow := s.shadow
+	s.shadow = nil
+	s.correction = nil
+	s.stopped = true
+	s.cfgMu.Unlock()
+	shadow.Close()
 
 	if s.keepAliveEnabled {
 		select {

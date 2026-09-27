@@ -27,6 +27,9 @@ func (s *Server) registerManagementRoutes() {
 	mgmt := s.engine.Group("/v0/management")
 	mgmt.Use(s.managementAvailabilityMiddleware(), s.mgmt.Middleware())
 	{
+		mgmt.GET("/cjkevi/history", s.getCJKeviHistory)
+		mgmt.GET("/cjkevi/settings", s.mgmt.GetCJKeviSettings)
+		mgmt.PUT("/cjkevi/settings", s.mgmt.PutCJKeviSettings)
 		mgmt.GET("/config", s.mgmt.GetConfig)
 		mgmt.GET("/config.yaml", s.mgmt.GetConfigYAML)
 		mgmt.PUT("/config.yaml", s.mgmt.PutConfigYAML)
@@ -310,6 +313,10 @@ func (s *Server) serveManagementControlPanel(c *gin.Context) {
 	cfg := s.cfg
 	if cfg == nil || cfg.Home.Enabled || cfg.RemoteManagement.DisableControlPanel {
 		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
+	if localFile := strings.TrimSpace(cfg.RemoteManagement.PanelLocalFile); localFile != "" {
+		c.File(localFile)
 		return
 	}
 	filePath := managementasset.FilePath(s.configFilePath)

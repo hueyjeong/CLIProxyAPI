@@ -8,6 +8,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/access"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/cjkevi"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/managementasset"
@@ -50,6 +51,15 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 		ctx = context.Background()
 	}
 	if errContext := ctx.Err(); errContext != nil {
+		return false
+	}
+	if errCorrection := cfg.ValidateCJKeviCorrection(); errCorrection != nil {
+		log.WithError(errCorrection).Error("invalid CJKevi correction configuration")
+		return false
+	}
+	correction, errCorrection := newCorrection(cfg.CJKeviCorrection)
+	if errCorrection != nil {
+		log.WithError(errCorrection).Error("failed to initialize CJKevi correction")
 		return false
 	}
 	// Reconstruct old config from YAML snapshot to avoid reference sharing issues
@@ -168,8 +178,17 @@ func (s *Server) UpdateClientsContext(ctx context.Context, cfg *config.Config) b
 		s.exampleAPIKeySafeModeActive.Store(exampleAPIKeySafeModeRequired)
 	}
 	s.cfgMu.Lock()
+	var previousShadow *cjkevi.Observer
+	if !s.stopped && (oldCfg == nil || !reflect.DeepEqual(oldCfg.CJKeviShadow, cfg.CJKeviShadow)) {
+		previousShadow = s.shadow
+		s.shadow = cjkevi.NewObserver(cfg.CJKeviShadow, s.shadowBudget)
+	}
+	if !s.stopped {
+		s.correction = correction
+	}
 	s.cfg = cfg
 	s.cfgMu.Unlock()
+	previousShadow.Close()
 	if s.codexLiveHandler != nil {
 		if errUpdate := s.codexLiveHandler.UpdateConfig(cfg); errUpdate != nil {
 			log.WithError(errUpdate).Error("failed to update Codex Live media relay configuration")

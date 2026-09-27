@@ -15,6 +15,18 @@ refs/*
 plugins/*
 examples/plugin/bin/*
 
+# Local agent sessions, QA captures, and Python bytecode
+/.omo/
+__pycache__/
+*.py[cod]
+
+# Per-call experiment traces and runtime server logs; keep scripts, manifests,
+# aggregate results, selection freezes, and documented smoke evidence visible.
+/evals/
+/evals/**/attempts/
+/evals/**/logs/
+/evals/**/*.pid
+
 # Storage backends
 pgstore/*
 gitstore/*
@@ -30,6 +42,8 @@ auths/*
 
 # Documentation
 docs/*
+docs/cjkevi-shadow.md
+docs/cjkevi-correction.md
 AGENTS.md
 CLAUDE.md
 GEMINI.md

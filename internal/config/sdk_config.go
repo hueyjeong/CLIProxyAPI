@@ -4,6 +4,13 @@
 // debug settings, proxy configuration, and API keys.
 package config
 
+import (
+	"fmt"
+	"net"
+	"net/url"
+	"time"
+)
+
 // SDKConfig represents the application's configuration, loaded from a YAML file.
 type SDKConfig struct {
 	// CodexResponseSteering mirrors the provider-wide runtime setting for API handlers.
@@ -54,6 +61,12 @@ type SDKConfig struct {
 	// ClaudeCode configures Claude Code compatibility behavior.
 	ClaudeCode ClaudeCodeConfig `yaml:"claude-code" json:"claude-code"`
 
+	// CJKeviShadow observes completed Messages, Chat, and Responses text without changing it.
+	CJKeviShadow CJKeviShadowConfig `yaml:"cjkevi-shadow" json:"cjkevi-shadow"`
+
+	// CJKeviCorrection rewrites eligible completed assistant text when enabled.
+	CJKeviCorrection CJKeviCorrectionConfig `yaml:"cjkevi-correction" json:"cjkevi-correction"`
+
 	// APIKeys is a list of keys for authenticating clients to this proxy server.
 	APIKeys []string `yaml:"api-keys" json:"api-keys"`
 
@@ -67,6 +80,93 @@ type SDKConfig struct {
 	// NonStreamKeepAliveInterval controls how often blank lines are emitted for non-streaming responses.
 	// <= 0 disables keep-alives. Value is in seconds.
 	NonStreamKeepAliveInterval int `yaml:"nonstream-keepalive-interval,omitempty" json:"nonstream-keepalive-interval,omitempty"`
+}
+
+const CJKeviRequestCaptureLimit = 16 << 10
+
+const CJKeviQueueByteLimit = 16 << 20
+
+// CJKeviShadowConfig controls optional, local-only shadow observation.
+type CJKeviShadowConfig struct {
+	Enabled         bool   `yaml:"enabled" json:"enabled"`
+	DefaultLanguage string `yaml:"default-language" json:"default-language"`
+	MaxCaptureBytes int    `yaml:"max-capture-bytes" json:"max-capture-bytes"`
+	QueueSize       int    `yaml:"queue-size" json:"queue-size"`
+	Workers         int    `yaml:"workers" json:"workers"`
+	JudgeTimeout    string `yaml:"judge-timeout" json:"judge-timeout"`
+	KevURL          string `yaml:"kev-url" json:"kev-url"`
+	KevModel        string `yaml:"kev-model" json:"kev-model"`
+	ModelVersion    string `yaml:"model-version" json:"model-version"`
+}
+
+// WithDefaults supplies bounded limits without enabling observation or a judge.
+func (c CJKeviShadowConfig) WithDefaults() CJKeviShadowConfig {
+	if c.DefaultLanguage == "" {
+		c.DefaultLanguage = "ko-KR"
+	}
+	if c.MaxCaptureBytes == 0 {
+		c.MaxCaptureBytes = 64 << 10
+	}
+	if c.QueueSize == 0 {
+		c.QueueSize = 32
+	}
+	if c.Workers == 0 {
+		c.Workers = 2
+	}
+	if c.JudgeTimeout == "" {
+		c.JudgeTimeout = "2s"
+	}
+	if c.KevModel == "" {
+		c.KevModel = "jaredpalmer/kev-0.8b"
+	}
+	if c.ModelVersion == "" {
+		c.ModelVersion = "local-v1"
+	}
+	return c
+}
+
+func ValidCJKeviLanguage(language string) bool {
+	switch language {
+	case "ko-KR", "ja-JP", "zh-CN", "zh-TW", "en-US":
+		return true
+	default:
+		return false
+	}
+}
+
+// Validate refuses unbounded collection and any non-loopback judge endpoint.
+func (c CJKeviShadowConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	c = c.WithDefaults()
+	if !ValidCJKeviLanguage(c.DefaultLanguage) {
+		return fmt.Errorf("cjkevi-shadow.default-language must be an allowed language")
+	}
+	if c.MaxCaptureBytes < 1 || c.MaxCaptureBytes > 1<<20 || c.QueueSize < 1 || c.QueueSize > 512 || c.Workers < 1 || c.Workers > 8 {
+		return fmt.Errorf("cjkevi-shadow capture, queue, or worker limit is out of range")
+	}
+	if int64(c.QueueSize)*int64(c.MaxCaptureBytes+CJKeviRequestCaptureLimit) > CJKeviQueueByteLimit {
+		return fmt.Errorf("cjkevi-shadow queued response/request bytes exceed 16 MiB")
+	}
+	timeout, errTimeout := time.ParseDuration(c.JudgeTimeout)
+	if errTimeout != nil || timeout <= 0 || timeout > 10*time.Second {
+		return fmt.Errorf("cjkevi-shadow.judge-timeout must be between 0 and 10s")
+	}
+	if len(c.ModelVersion) > 128 || len(c.KevModel) > 128 {
+		return fmt.Errorf("cjkevi-shadow model name or version is too long")
+	}
+	if c.KevURL != "" {
+		u, errURL := url.Parse(c.KevURL)
+		if errURL != nil || u.Scheme != "http" || u.User != nil || u.Path != "/v1/systemone" || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+			return fmt.Errorf("cjkevi-shadow.kev-url must be a local HTTP /v1/systemone URL")
+		}
+		ip := net.ParseIP(u.Hostname())
+		if ip == nil || !ip.IsLoopback() || u.Port() == "" {
+			return fmt.Errorf("cjkevi-shadow.kev-url must use a loopback IP and explicit port")
+		}
+	}
+	return nil
 }
 
 // ClaudeCodeConfig configures Claude Code compatibility behavior.

@@ -47,6 +47,12 @@ func ParseConfigBytes(data []byte) (*Config, error) {
 	if errValidate := validateTrustedProxies(cfg.TrustedProxies); errValidate != nil {
 		return nil, errValidate
 	}
+	if errValidate := cfg.CJKeviShadow.Validate(); errValidate != nil {
+		return nil, errValidate
+	}
+	if errValidate := cfg.ValidateCJKeviCorrection(); errValidate != nil {
+		return nil, errValidate
+	}
 
 	cfg.CredentialConcurrency = cfg.CredentialConcurrency.WithDefaults()
 	if errValidate := cfg.CredentialInFlight.Validate(); errValidate != nil {
